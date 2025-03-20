@@ -17,8 +17,8 @@ def main():
     ocel = pm4py.read_ocel2('./data/ocel2-p2p.json')
 
     #print(ocel.objects[ocel.objects['ocel:type'] == 'products'])
-    # flatten_save_ocel(ocel)
-
+    flatten_save_ocel(ocel)
+    return
     #lc_data = mine_totem(ocel, 0.9)
 
     lc_data = {
@@ -119,9 +119,28 @@ def flatten_save_ocel(ocel):
     for object_type in ocel_object_types:
         flattened_ocel = pm4py.ocel_flattening(ocel, object_type)
         bpmn = pm4py.discover_bpmn_inductive(flattened_ocel)
+
+        # removes start and end nodes
+        end_nodes = set(filter(filter_end, bpmn.get_nodes()))
+        for end_node in end_nodes:
+            bpmn.remove_node(end_node)
+        start_nodes = set(filter(filter_start, bpmn.get_nodes()))
+        for start_node in start_nodes:
+            bpmn.remove_node(start_node)
+
+
         pm4py.save_vis_bpmn(bpmn, f"generated_data/bpmn_{object_type}.png")
 
 
+def filter_end(node):
+    if str(node).__contains__('@end'):
+        return True
+    return False
+
+def filter_start(node):
+    if str(node).__contains__('@start'):
+        return True
+    return False
 
 # find the timestamp for the first occurrence of each oid
 def first_occurrence(ocel):
