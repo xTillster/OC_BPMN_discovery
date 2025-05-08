@@ -5,6 +5,12 @@ from collections import defaultdict
 from pm4py import OCEL
 
 def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, defaultdict[str, set]]):
+    # Generate the output data objects first so that they may be reused for input again
+    for activity, values in connected_object_activity_graph.items():
+        for object_type, states in values.items():
+            add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{object_type}.bpmn', activity, f'{object_type}\n[{activity}]', input=False)
+
+    # Generate input data objects
     for activity, values in connected_object_activity_graph.items():
         for object_type, states in values.items():
             states_name = ""
@@ -14,7 +20,6 @@ def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, de
                 states_name = "[" + " | ".join(states) + "]"
 
             add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{object_type}.bpmn', activity, f'{object_type}\n{states_name}', input=True)
-            add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{object_type}.bpmn', activity, f'{object_type}\n[{activity}]', input=False)
 
 
 def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=True, output_path=None):
@@ -44,20 +49,34 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
         raise ValueError(f"No task with name '{activity_name}' found.")
     task_id = task.get('id')
 
-    # Generate IDs
-    data_obj_id = f"DataObject_{uuid.uuid4().hex[:8]}"
-    data_obj_ref_id = f"{data_obj_id}_ref"
+    # Try to find existing dataObjectReference by name
+    data_obj_ref = None
+    for existing_ref in process.findall(f'.//{{{bpmn_ns}}}dataObjectReference'):
+        if existing_ref.get('name') == data_object_name:
+            data_obj_ref = existing_ref
+            break
+
+    # If found, reuse it; otherwise, create new one
+    is_new_object = data_obj_ref is None
+
+    if is_new_object:
+        data_obj_id = f"DataObject_{uuid.uuid4().hex[:8]}"
+        data_obj_ref_id = f"{data_obj_id}_ref"
+        data_object = ET.Element(f"{{{bpmn_ns}}}dataObject", id=data_obj_id)
+        data_obj_ref = ET.Element(
+            f"{{{bpmn_ns}}}dataObjectReference",
+            id=data_obj_ref_id,
+            dataObjectRef=data_obj_id,
+            name=data_object_name
+        )
+        process.append(data_object)
+        process.append(data_obj_ref)
+    else:
+        data_obj_ref_id = data_obj_ref.get('id')
+        data_obj_id = data_obj_ref.get('dataObjectRef')
+
     data_assoc_id = f"DataAssoc_{uuid.uuid4().hex[:8]}"
     shape_id = f"{data_obj_ref_id}_di"
-
-    # Create dataObject and dataObjectReference
-    data_object = ET.Element(f"{{{bpmn_ns}}}dataObject", id=data_obj_id)
-    data_object_ref = ET.Element(
-        f"{{{bpmn_ns}}}dataObjectReference",
-        id=data_obj_ref_id,
-        dataObjectRef=data_obj_id,
-        name=data_object_name
-    )
 
     # Create data association and add to task
     assoc_tag = 'dataInputAssociation' if input else 'dataOutputAssociation'
@@ -76,10 +95,6 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
 
     data_assoc.extend([source_ref, target_ref])
     task.append(data_assoc)
-
-    # Add to process
-    process.append(data_object)
-    process.append(data_object_ref)
 
     # Add BPMNShape in diagram (above task)
     plane = root.find(f'.//{{{bpmndi_ns}}}BPMNPlane')
@@ -104,28 +119,39 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     width = float(bounds.get('width'))
     height = float(bounds.get('height'))
 
-    data_x = 0.
-    data_y = 0.
+    # Determine shape position for data object
+    if is_new_object:
+        # Place data object left or right above task
+        if input:
+            data_x = x + (width - 36) / 2 - 50
+            data_y = y - 100
+        else:
+            data_x = x + (width - 36) / 2 + 50
+            data_y = y - 100
 
-    # Place data object left above task
-    if input:
-        data_x = x + (width - 36) / 2 - 50 # center horizontally over task
-        data_y = y - 100  # place 60px above
-    # Place data object right above task
+        # Create BPMNShape
+        data_shape = ET.Element(f"{{{bpmndi_ns}}}BPMNShape", id=shape_id, bpmnElement=data_obj_ref_id)
+        bounds_elem = ET.Element(f"{{{dc_ns}}}Bounds", x=str(data_x), y=str(data_y), width="36", height="50")
+        label_elem = ET.Element(f"{{{bpmndi_ns}}}BPMNLabel")
+        label_bounds = ET.Element(f"{{{dc_ns}}}Bounds", x=str(data_x + 6), y=str(data_y + 57), width="25", height="14")
+        label_elem.append(label_bounds)
+        data_shape.append(bounds_elem)
+        data_shape.append(label_elem)
+        plane.append(data_shape)
     else:
-        data_x = x + (width - 36) / 2 + 50 # center horizontally over task
-        data_y = y - 100  # place 60px above
-
-    # Create BPMNShape
-    data_shape = ET.Element(f"{{{bpmndi_ns}}}BPMNShape", id=shape_id, bpmnElement=data_obj_ref_id)
-    bounds_elem = ET.Element(f"{{{dc_ns}}}Bounds", x=str(data_x), y=str(data_y), width="36", height="50")
-    label_elem = ET.Element(f"{{{bpmndi_ns}}}BPMNLabel")
-    label_bounds = ET.Element(f"{{{dc_ns}}}Bounds", x=str(data_x + 6), y=str(data_y + 57), width="25", height="14")
-    label_elem.append(label_bounds)
-
-    data_shape.append(bounds_elem)
-    data_shape.append(label_elem)
-    plane.append(data_shape)
+        # Reuse coordinates from existing shape
+        existing_shape = None
+        for shape in plane.findall(f'.//{{{bpmndi_ns}}}BPMNShape'):
+            if shape.get('bpmnElement') == data_obj_ref_id:
+                existing_shape = shape
+                break
+        if existing_shape is None:
+            raise ValueError(f"No BPMNShape found for reused data object '{data_object_name}'.")
+        existing_bounds = existing_shape.find(f'.//{{{dc_ns}}}Bounds')
+        if existing_bounds is None:
+            raise ValueError("No <dc:Bounds> in reused data object shape.")
+        data_x = float(existing_bounds.get('x'))
+        data_y = float(existing_bounds.get('y'))
 
     # Add BPMNEdge to show the data association visually
     di_ns = nsmap.get('omgdi') or 'http://www.omg.org/spec/DD/20100524/DI'
@@ -134,13 +160,13 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
 
     # From data object (bottom center) to task (top center) or vice versa
     if input:
-        # Data flows into task
-        wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom center of data object
-        wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2), y=str(y))  # top center of task
+        # Input: data → task
+        wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom left of data object
+        wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 - 10), y=str(y))  # top left of task
     else:
-        # Data flows out of task
-        wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2), y=str(y + height))  # bottom center of task
-        wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y))  # top center of data object
+        # Output: task → data
+        wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 + 10), y=str(y))  # top right of task
+        wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom right of data object
 
     bpmn_edge.extend([wp1, wp2])
     plane.append(bpmn_edge)
