@@ -166,14 +166,6 @@ def flatten_save_ocel(ocel):
         flattened_ocel = pm4py.ocel_flattening(ocel, object_type)
         bpmn = pm4py.discover_bpmn_inductive(flattened_ocel)
 
-        # removes start and end nodes
-        end_nodes = set(filter(filter_end, bpmn.get_nodes()))
-        for end_node in end_nodes:
-            bpmn.remove_node(end_node)
-        start_nodes = set(filter(filter_start, bpmn.get_nodes()))
-        for start_node in start_nodes:
-            bpmn.remove_node(start_node)
-
         pm4py.write_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.bpmn")
         pm4py.save_vis_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.png")
 

@@ -6,9 +6,11 @@ from pm4py import OCEL
 
 def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, defaultdict[str, set]]):
     # Generate the output data objects first so that they may be reused for input again
+    # Remove start and end events
     for activity, values in connected_object_activity_graph.items():
         for object_type, states in values.items():
             add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{object_type}.bpmn', activity, f'{object_type}\n[{activity}]', input=False)
+            remove_start_and_end_events(f'./generated_data/flattened/bpmn_{object_type}.bpmn')
 
     # Generate input data objects
     for activity, values in connected_object_activity_graph.items():
@@ -175,3 +177,60 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     output_path = output_path or file_path
     tree.write(output_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
     print(f"Data object '{data_object_name}' added above task '{activity_name}'.")
+
+
+
+def remove_start_and_end_events(file_path, output_path=None):
+    parser = ET.XMLParser(remove_blank_text=True)
+    tree = ET.parse(file_path, parser)
+    root = tree.getroot()
+    nsmap = root.nsmap
+
+    bpmn_ns = nsmap.get('bpmn')
+    bpmndi_ns = nsmap.get('bpmndi')
+    dc_ns = nsmap.get('omgdc')
+    di_ns = nsmap.get('omgdi') or 'http://www.omg.org/spec/DD/20100524/DI'
+
+    if not (bpmn_ns and bpmndi_ns):
+        raise ValueError("Missing required namespaces: bpmn, bpmndi.")
+
+    process = root.find(f'.//{{{bpmn_ns}}}process')
+    plane = root.find(f'.//{{{bpmndi_ns}}}BPMNPlane')
+
+    if process is None:
+        raise ValueError("No <bpmn:process> element found.")
+
+    # === Step 1: Remove start/end events and track their IDs ===
+    event_ids = []
+    for tag in ['startEvent', 'endEvent']:
+        for elem in process.findall(f'{{{bpmn_ns}}}{tag}'):
+            event_ids.append(elem.get('id'))
+            process.remove(elem)
+
+    # === Step 2: Remove related sequenceFlows and track their IDs ===
+    removed_sequenceflow_ids = []
+    for seq_flow in list(process.findall(f'{{{bpmn_ns}}}sequenceFlow')):
+        if seq_flow.get('sourceRef') in event_ids or seq_flow.get('targetRef') in event_ids:
+            removed_sequenceflow_ids.append(seq_flow.get('id'))
+            process.remove(seq_flow)
+
+    # === Step 3: Clean up incoming/outgoing references in other elements ===
+    for elem in process.iter():
+        for tag in ['incoming', 'outgoing']:
+            for ref in list(elem.findall(f'{{{bpmn_ns}}}{tag}')):
+                if ref.text in removed_sequenceflow_ids:
+                    elem.remove(ref)
+
+    # === Step 4: Remove diagram shapes and edges related to removed elements ===
+    if plane is not None:
+        for element in list(plane):
+            bpmn_element_id = element.get('bpmnElement')
+            if (
+                bpmn_element_id in event_ids or
+                bpmn_element_id in removed_sequenceflow_ids
+            ):
+                plane.remove(element)
+
+    # === Step 5: Save output ===
+    output_path = output_path or file_path
+    tree.write(output_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
