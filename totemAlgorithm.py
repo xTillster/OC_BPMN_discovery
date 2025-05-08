@@ -12,17 +12,17 @@ TR_PARALLEL = "P"
 EC_TOTAL = "total"
 EC_ZERO = "0"
 EC_ONE = "1"
-EC_ZERO_ONE = "0...1"
+EC_ZERO_ONE = "0..1"
 EC_MANY = "1..*"
-EC_ZERO_MANY = "0...*"
+EC_ZERO_MANY = "0..*"
 
 # Event cardinality constants
 LC_TOTAL = "total"
 LC_ZERO = "0"
 LC_ONE = "1"
-LC_ZERO_ONE = "0...1"
+LC_ZERO_ONE = "0..1"
 LC_MANY = "1..*"
-LC_ZERO_MANY = "0...*"
+LC_ZERO_MANY = "0..*"
 
 DATEFORMAT = "%Y-%m-%d %H:%M:%S"
 
