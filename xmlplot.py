@@ -58,7 +58,7 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
             data_obj_ref = existing_ref
             break
 
-    # If found, reuse it; otherwise, create new one
+    # Reuse or create new one
     is_new_object = data_obj_ref is None
 
     if is_new_object:
@@ -75,12 +75,12 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
         process.append(data_obj_ref)
     else:
         data_obj_ref_id = data_obj_ref.get('id')
-        data_obj_id = data_obj_ref.get('dataObjectRef')
+        #data_obj_id = data_obj_ref.get('dataObjectRef')
 
     data_assoc_id = f"DataAssoc_{uuid.uuid4().hex[:8]}"
     shape_id = f"{data_obj_ref_id}_di"
 
-    # Create data association and add to task
+    # Create data association
     assoc_tag = 'dataInputAssociation' if input else 'dataOutputAssociation'
     data_assoc = ET.Element(f"{{{bpmn_ns}}}{assoc_tag}", id=data_assoc_id)
 
@@ -98,12 +98,12 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     data_assoc.extend([source_ref, target_ref])
     task.append(data_assoc)
 
-    # Add BPMNShape in diagram (above task)
+    # Add BPMNShape in diagram
     plane = root.find(f'.//{{{bpmndi_ns}}}BPMNPlane')
     if plane is None:
         raise ValueError("No <bpmndi:BPMNPlane> found.")
 
-    # Find the shape of the task to position data object
+    # Find shape of the task
     task_shape = None
     for shape in plane.findall(f'.//{{{bpmndi_ns}}}BPMNShape'):
         if shape.get('bpmnElement') == task_id:
@@ -119,7 +119,7 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     x = float(bounds.get('x'))
     y = float(bounds.get('y'))
     width = float(bounds.get('width'))
-    height = float(bounds.get('height'))
+    #height = float(bounds.get('height'))
 
     # Determine shape position for data object
     if is_new_object:
@@ -131,7 +131,7 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
             data_x = x + (width - 36) / 2 + 50
             data_y = y - 100
 
-        # Create BPMNShape
+        # Create new BPMNShape
         data_shape = ET.Element(f"{{{bpmndi_ns}}}BPMNShape", id=shape_id, bpmnElement=data_obj_ref_id)
         bounds_elem = ET.Element(f"{{{dc_ns}}}Bounds", x=str(data_x), y=str(data_y), width="36", height="50")
         label_elem = ET.Element(f"{{{bpmndi_ns}}}BPMNLabel")
@@ -141,7 +141,7 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
         data_shape.append(label_elem)
         plane.append(data_shape)
     else:
-        # Reuse coordinates from existing shape
+        # Reuse existing shape
         existing_shape = None
         for shape in plane.findall(f'.//{{{bpmndi_ns}}}BPMNShape'):
             if shape.get('bpmnElement') == data_obj_ref_id:
@@ -155,18 +155,16 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
         data_x = float(existing_bounds.get('x'))
         data_y = float(existing_bounds.get('y'))
 
-    # Add BPMNEdge to show the data association visually
+    # Add BPMNEdge
     di_ns = nsmap.get('omgdi') or 'http://www.omg.org/spec/DD/20100524/DI'
     edge_id = f"{data_assoc_id}_edge"
     bpmn_edge = ET.Element(f"{{{bpmndi_ns}}}BPMNEdge", id=edge_id, bpmnElement=data_assoc_id)
 
     # From data object (bottom center) to task (top center) or vice versa
     if input:
-        # Input: data → task
         wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom left of data object
         wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 - 10), y=str(y))  # top left of task
     else:
-        # Output: task → data
         wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 + 10), y=str(y))  # top right of task
         wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom right of data object
 
@@ -188,8 +186,6 @@ def remove_start_and_end_events(file_path, output_path=None):
 
     bpmn_ns = nsmap.get('bpmn')
     bpmndi_ns = nsmap.get('bpmndi')
-    dc_ns = nsmap.get('omgdc')
-    di_ns = nsmap.get('omgdi') or 'http://www.omg.org/spec/DD/20100524/DI'
 
     if not (bpmn_ns and bpmndi_ns):
         raise ValueError("Missing required namespaces: bpmn, bpmndi.")
@@ -200,28 +196,28 @@ def remove_start_and_end_events(file_path, output_path=None):
     if process is None:
         raise ValueError("No <bpmn:process> element found.")
 
-    # === Step 1: Remove start/end events and track their IDs ===
+    # Remove start/end events and track their IDs
     event_ids = []
     for tag in ['startEvent', 'endEvent']:
         for elem in process.findall(f'{{{bpmn_ns}}}{tag}'):
             event_ids.append(elem.get('id'))
             process.remove(elem)
 
-    # === Step 2: Remove related sequenceFlows and track their IDs ===
+    # Remove related sequenceFlows and track their IDs
     removed_sequenceflow_ids = []
     for seq_flow in list(process.findall(f'{{{bpmn_ns}}}sequenceFlow')):
         if seq_flow.get('sourceRef') in event_ids or seq_flow.get('targetRef') in event_ids:
             removed_sequenceflow_ids.append(seq_flow.get('id'))
             process.remove(seq_flow)
 
-    # === Step 3: Clean up incoming/outgoing references in other elements ===
+    # Clean up incoming/outgoing references
     for elem in process.iter():
         for tag in ['incoming', 'outgoing']:
             for ref in list(elem.findall(f'{{{bpmn_ns}}}{tag}')):
                 if ref.text in removed_sequenceflow_ids:
                     elem.remove(ref)
 
-    # === Step 4: Remove diagram shapes and edges related to removed elements ===
+    # Remove related diagram shapes and edges
     if plane is not None:
         for element in list(plane):
             bpmn_element_id = element.get('bpmnElement')
@@ -231,6 +227,6 @@ def remove_start_and_end_events(file_path, output_path=None):
             ):
                 plane.remove(element)
 
-    # === Step 5: Save output ===
+    # Save output
     output_path = output_path or file_path
     tree.write(output_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')

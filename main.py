@@ -782,9 +782,6 @@ def get_connected_activity_object_states(ocel: OCEL, obj_graphs: defaultdict[str
         for object_type, g in obj_graphs.items():
             if activity not in g.nodes:
                 continue
-            #print(activity)
-            #print(g.nodes)
-            #node = g.nodes[activity]
             object_origins = list(g.predecessors(activity))
             activity_objects_states[activity][object_type].update(object_origins)
 
