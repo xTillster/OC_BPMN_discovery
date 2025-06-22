@@ -27,11 +27,19 @@ def main():
     #print(ocel.objects[ocel.objects['ocel:type'] == 'products'])
 
     #add_data_object_to_bpmn('./generated_data/flattened/bpmn_Truck_copy.bpmn', 'Load Truck', 'Truck \n [new]', False)
+    print(ocel.events.dtypes)
+    print(ocel.objects.dtypes)
+    print(ocel.relations.dtypes)
 
-    flatten_save_ocel(ocel)
+    set_tiebreaker(ocel)
+    totem = mine_totem(ocel, 0.9)
+    generate_uml_diagram(totem)
+    fragments = apply_fragmentation(ocel, totem)
+    flatten_save_fragments(ocel, fragments)
+    #flatten_save_ocel(ocel)
     obj_graphs = get_object_graphs(ocel)
     connected_object_activity_graph = get_connected_activity_object_states(ocel, obj_graphs)
-    xmlplot.finish_bpmn(ocel, connected_object_activity_graph)
+    xmlplot.finish_bpmn(ocel, connected_object_activity_graph, fragments)
     return
 
     for activity, values in connected_object_activity_graph.items():
@@ -204,8 +212,8 @@ def flatten_save_fragments(ocel, fragments):
         for start_node in start_nodes:
             bpmn.remove_node(start_node)
 
-        pm4py.write_bpmn(bpmn, f"generated_data/fragments/bpmn_{object_type}.bpmn")
-        pm4py.save_vis_bpmn(bpmn, f"generated_data/fragments/bpmn_{object_type}.png")
+        pm4py.write_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.bpmn")
+        pm4py.save_vis_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.png")
 
 
 def filter_end(node):
@@ -477,6 +485,18 @@ def build_oc_bpmn(ocel):
     generate_uml_diagram(totem)
     generate_lifecycles(ocel)
     apply_fragmentation(ocel, totem)
+
+def helper_fragments(ocel: OCEL):
+    fragments = defaultdict(set)
+    oid_to_object_type = defaultdict(str)
+
+    for _, row in ocel.objects.iterrows():
+        oid_to_object_type[row['ocel:oid']] = row['ocel:type']
+
+    for _, row in ocel.relations.iterrows():
+        fragments[oid_to_object_type[row['ocel:oid']]].add(row['ocel:activity'])
+
+    return fragments
 
 def apply_fragmentation(ocel, totem):
     activities_without_objects = get_all_activities_without_objects(ocel)
@@ -752,6 +772,8 @@ def get_object_graphs(ocel: OCEL):
     oid_to_object_type = defaultdict(str)
 
     for _, row in sorted_ocel.iterrows():
+        if len(obj_states[row['ocel:oid']]) == 0:
+            obj_states[row['ocel:oid']].append('new')
         obj_states[row['ocel:oid']].append(row['ocel:activity'])
 
     for _, row in ocel.objects.iterrows():

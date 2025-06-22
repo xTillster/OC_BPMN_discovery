@@ -4,7 +4,8 @@ from collections import defaultdict
 
 from pm4py import OCEL
 
-def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, defaultdict[str, set]]):
+def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, defaultdict[str, set]], fragments: defaultdict[str, set]):
+    '''
     # Generate the output data objects first so that they may be reused for input again
     # Remove start and end events
     for activity, values in connected_object_activity_graph.items():
@@ -17,14 +18,55 @@ def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, de
         for object_type, states in values.items():
             states_name = ""
             if len(states) == 0:
-                states_name = "[new]"
+                states_name = "[new shouldn't be]"
             else:
                 states_name = "[" + " | ".join(states) + "]"
 
             add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{object_type}.bpmn', activity, f'{object_type}\n{states_name}', input=True)
+    '''
+    input_count = defaultdict(int)
+    output_count = defaultdict(int)
+
+    #reverse key-value of fragment list to match activity to object type
+    reversed_fragments = defaultdict(str)
+    for key, values in fragments.items():
+        for value in values:
+            reversed_fragments[value] = key
+    print(reversed_fragments)
+    # Generate the output data objects first so that they may be reused for input again
+    # Remove start and end events
+    for activity, values in connected_object_activity_graph.items():
+        for object_type, states in values.items():
+            if len(reversed_fragments[activity]) == 0:
+                print("can this even happen?")
+                continue
+            output_count[activity] += 1
+            add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{reversed_fragments[activity]}.bpmn',
+                                    activity,
+                                    f'{object_type}\n[{activity}]',
+                                    output_count[activity],
+                                    input=False)
+            # not every object type has his own fragment
+            if object_type in fragments.keys():
+                remove_start_and_end_events(f'./generated_data/flattened/bpmn_{object_type}.bpmn')
+
+    # Generate input data objects
+    for activity, values in connected_object_activity_graph.items():
+        for object_type, states in values.items():
+            states_name = ""
+            if len(states) == 0:
+                states_name = "[new shouldn't be]"
+            else:
+                states_name = "[" + " | ".join(states) + "]"
+            input_count[activity] += 1
+            add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{reversed_fragments[activity]}.bpmn',
+                                    activity,
+                                    f'{object_type}\n{states_name}',
+                                    input_count[activity],
+                                    input=True)
 
 
-def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=True, output_path=None):
+def add_data_object_to_bpmn(file_path, activity_name, data_object_name, in_out_counter, input=True, output_path=None):
     parser = ET.XMLParser(remove_blank_text=True)
     tree = ET.parse(file_path, parser)
     root = tree.getroot()
@@ -124,12 +166,28 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     # Determine shape position for data object
     if is_new_object:
         # Place data object left or right above task
+        '''
         if input:
             data_x = x + (width - 36) / 2 - 50
             data_y = y - 100
         else:
             data_x = x + (width - 36) / 2 + 50
-            data_y = y - 100
+            data_y = y - 100 
+        '''
+        if input:
+            if in_out_counter % 2 == 1:
+                data_x = x + (width - 36) / 2 - 50 * in_out_counter
+                data_y = y - 100
+            else:
+                data_x = x + (width - 36) / 2 - 50 * (in_out_counter - 1)
+                data_y = y + 100
+        else:
+            if in_out_counter % 2 == 1:
+                data_x = x + (width - 36) / 2 + 50 * in_out_counter
+                data_y = y - 100
+            else:
+                data_x = x + (width - 36) / 2 + 50 * (in_out_counter - 1)
+                data_y = y + 100
 
         # Create new BPMNShape
         data_shape = ET.Element(f"{{{bpmndi_ns}}}BPMNShape", id=shape_id, bpmnElement=data_obj_ref_id)
@@ -160,6 +218,7 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     edge_id = f"{data_assoc_id}_edge"
     bpmn_edge = ET.Element(f"{{{bpmndi_ns}}}BPMNEdge", id=edge_id, bpmnElement=data_assoc_id)
 
+    '''
     # From data object (bottom center) to task (top center) or vice versa
     if input:
         wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom left of data object
@@ -167,6 +226,21 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, input=Tr
     else:
         wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 + 10), y=str(y))  # top right of task
         wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom right of data object
+    '''
+    if input:
+        if in_out_counter % 2 == 1:
+            wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom left of data object
+            wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 - 10), y=str(y))  # top left of task
+        else:
+            wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y))  # top left of data object
+            wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 - 10), y=str(y+36))  # top left of task
+    else:
+        if in_out_counter % 2 == 1:
+            wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 + 10), y=str(y))  # top right of task
+            wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y + 50))  # bottom right of data object
+        else:
+            wp1 = ET.Element(f"{{{di_ns}}}waypoint", x=str(x + width / 2 + 10), y=str(y + 36))  # top right of task
+            wp2 = ET.Element(f"{{{di_ns}}}waypoint", x=str(data_x + 18), y=str(data_y))  # bottom right of data object
 
     bpmn_edge.extend([wp1, wp2])
     plane.append(bpmn_edge)
