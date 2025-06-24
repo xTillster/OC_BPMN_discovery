@@ -1,6 +1,8 @@
 import csv
 from datetime import datetime
 
+import uuid
+import xml.etree.ElementTree as ET
 import networkx as nx
 import pm4py
 import xmlplot
@@ -16,24 +18,33 @@ TIEBREAKER_LIST = list()
 
 def main():
     #sind in order-management.json die oids in ocel.object_changes mit types verwechselt worden?
-    #ocel = pm4py.read_ocel2('./data/order-management.json')
+    ocel = pm4py.read_ocel2('./data/order-management.json')
     #print(set(ocel.objects['ocel:type'].values))
 
     #ocel = pm4py.read_ocel('./data/running-example.jsonocel')
-    ocel = pm4py.read_ocel2('./data/ContainerLogistics.json')
+    #ocel = pm4py.read_ocel2('./data/ContainerLogistics.json')
     #ocel = pm4py.read_ocel2('./data/ocel2-p2p.json')
     #ocel = pm4py.read_ocel('./data/p2p.jsonocel')
 
-    #print(ocel.objects[ocel.objects['ocel:type'] == 'products'])
+    xmlplot.merge_bpmn_files_to_fragment()
+    return
 
-    #add_data_object_to_bpmn('./generated_data/flattened/bpmn_Truck_copy.bpmn', 'Load Truck', 'Truck \n [new]', False)
-    print(ocel.events.dtypes)
-    print(ocel.objects.dtypes)
-    print(ocel.relations.dtypes)
+    obj_ids = xmlplot.generate_object_ids(ocel)
+    print(obj_ids)
+    generate_lifecycles(ocel, obj_ids)
+
+    #generate_uml_diagram(lc_data)
+
+
+    #lc_data = mine_totem(ocel, 0.9)
+    #ocel = read_ocel()
+    #if ocel is None:
+    #    return
 
     set_tiebreaker(ocel)
     totem = mine_totem(ocel, 0.9)
-    generate_uml_diagram(totem)
+    xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
+    #generate_uml_diagram(totem)
     fragments = apply_fragmentation(ocel, totem)
     flatten_save_fragments(ocel, fragments)
     #flatten_save_ocel(ocel)
@@ -97,7 +108,7 @@ def main():
 
     generate_uml_diagram(lc_data)
 
-    generate_lifecycles(ocel)
+    generate_lifecycles(ocel, obj_ids)
 
     return
     #print(ocel.events[ocel.events['ocel:eid'] == 'place_o-990001'])
@@ -152,9 +163,30 @@ def generate_uml_diagram(lc_data: dict[str, dict[str, tuple[str, str]]], output_
         for child_class, (multiplicity_parent, multiplicity_child) in connections.items():
             dot.edge(parent_class, child_class, arrowhead="none", taillabel=f" {multiplicity_parent} ", headlabel=f" {multiplicity_child} ")
 
+    plain_output = dot.pipe(format='plain').decode('utf-8')
+
+    root = ET.Element("UMLDiagram")
+
+    for line in plain_output.splitlines():
+        if line.startswith('node'):
+            parts = line.split()
+            name = parts[1]
+            x, y = parts[2], parts[3]
+            node_elem = ET.SubElement(root, "Node", name=name, x=x, y=y)
+
+        elif line.startswith('edge'):
+            parts = line.split()
+            tail, head = parts[1], parts[2]
+            edge_elem = ET.SubElement(root, "Edge", source=tail, target=head)
+
+    # Build XML string
+    tree = ET.ElementTree(root)
+    tree.write("uml_diagram.xml", encoding="utf-8", xml_declaration=True)
+    print("XML written to uml_diagram.xml")
+
     # Save UML diagram as PNG
-    dot.render(output_filename, cleanup=True)
-    print(f"UML Diagram saved as {output_filename}.png")
+    #dot.render(output_filename, cleanup=True)
+    #print(f"UML Diagram saved as {output_filename}.png")
 
 
 def wrap_labels(label):
@@ -301,7 +333,11 @@ def draw_and_save_graph(G, filename):
     plt.figure(figsize=(8, 6))
     #pos = nx.spring_layout(G)  # Position nodes for visualization
     pos = nx.kamada_kawai_layout(G)
+    print(f"position is: {pos}")
 
+    for key, value in pos.items():
+        print(f"{key}: {int(value[0]*100)}, {int(value[1]*100)}")
+    print()
     wrapped_labels = {node: wrap_labels(node) for node in G.nodes()}
 
     # Draw the graph with better spacing and visibility
@@ -312,7 +348,7 @@ def draw_and_save_graph(G, filename):
     plt.close()
 
 
-def generate_lifecycles(ocel):
+def generate_lifecycles(ocel, obj_ids):
     object_id_to_type : dict[str, str] = dict()
     object_paths = get_sorted_oid_paths(ocel)
 
@@ -327,8 +363,12 @@ def generate_lifecycles(ocel):
     type_to_graph = {obj_type: build_graph(paths) for obj_type, paths in type_to_paths.items()}
     nx_graphs = {obj_type: create_nx_graph(graph) for obj_type, graph in type_to_graph.items()}
 
+    xmlplot.create_lifecycle_xml(type_to_paths, obj_ids)
+
     for obj_type, G in nx_graphs.items():
         draw_and_save_graph(G, f"generated_data/graph_{obj_type}.png")
+        for transition in G.edges:
+            print(transition)
 
     with open("generated_data/graph_edges.csv", "w", newline="") as f:
         writer = csv.writer(f)
@@ -809,6 +849,30 @@ def get_connected_activity_object_states(ocel: OCEL, obj_graphs: defaultdict[str
 
     return activity_objects_states
 
+def read_ocel():
+    print("Enter the path to the OCEL event log")
+    while True:
+        user_input = input("Path: ")
+        user_input = user_input.strip()
+
+        try:
+            ocel = pm4py.read_ocel2(user_input)
+        except Exception:
+            try:
+                ocel = pm4py.read_ocel(user_input)
+            except Exception:
+                print("Invalid input, exciting program")
+                return None
+        return ocel
+
+def generate_object_ids(ocel):
+    object_name_to_id = dict()
+    object_types = ocel.objects[ocel.object_type_column].values.unique()
+
+    for object_type in object_types:
+        object_name_to_id[object_type] = f"Object_{uuid.uuid4().hex[:24]}"
+
+    return object_name_to_id
 
 if __name__ == '__main__':
     main()
