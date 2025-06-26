@@ -1,12 +1,17 @@
+import math
+
 import networkx as nx
-from PIL.ImageStat import Global
 from lxml import etree as ET
 import uuid
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 from matplotlib import pyplot as plt
 from pm4py import OCEL
+
+import os
+import zipfile
 
 state_name_to_ids = defaultdict(lambda: defaultdict(str))
 object_name_to_ids = dict()
@@ -530,9 +535,11 @@ def remove_start_and_end_events(file_path, output_path=None):
 def generate_unique_id(prefix):
         return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
-def create_lifecycle_xml(type_to_paths,object_name_to_id, filename = "generated_data/olcs.xml"):
+def create_lifecycle_xml(type_to_paths,object_name_to_id, filename = "olcs.xml"):
     global state_name_to_ids
     olcs = list(dict())
+
+    SCALE_FACTOR = 250
 
     type_to_graph = {obj_type: build_graph(paths) for obj_type, paths in type_to_paths.items()}
     nx_graphs = {obj_type: create_nx_graph(graph) for obj_type, graph in type_to_graph.items()}
@@ -543,7 +550,7 @@ def create_lifecycle_xml(type_to_paths,object_name_to_id, filename = "generated_
 
         states = list()
         for key, value in obj_positions.items():
-            states.append({"name": key, "x":int(value[0]*100), "y":int(value[1]*100)})
+            states.append({"name": key, "x":int(value[0]*SCALE_FACTOR), "y":int(value[1]*SCALE_FACTOR)})
             state_name_to_ids[obj_type][key] = f"State_{uuid.uuid4().hex[:24]}"
         transitions = list()
         for transition in G.edges:
@@ -667,7 +674,7 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
     # --- Scaling and Offset for Positions ---
     # NetworkX layout positions are typically between -1 and 1.
     # We need to scale and offset them to get reasonable pixel coordinates.
-    SCALE_FACTOR = 400  # Multiplier for coordinates
+    SCALE_FACTOR = 500  # Multiplier for coordinates
     X_OFFSET = 400      # Offset to center the diagram horizontally
     Y_OFFSET = 400     # Offset to center the diagram vertically
     CLASS_WIDTH = 160   # Fixed width for class shapes
@@ -815,6 +822,34 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             y=str(target_y_pos)
         )
 
+        # Add two labels: one for source, one for target
+        od_source_label = ET.SubElement(
+            od_di_association,
+            f"{{{odDi_ns}}}odSourceLabel"
+        )
+        position = offset_initial_waypoint(source_x_pos,target_x_pos,source_y_pos,target_y_pos)
+        ET.SubElement(
+            od_source_label,
+            f"{{{dc_ns}}}Bounds",
+            x=str(position[0]),
+            y=str(position[1]),
+            width="26",
+            height="18"
+        )
+        od_target_label = ET.SubElement(
+            od_di_association,
+            f"{{{odDi_ns}}}odTargetLabel"
+        )
+        position = offset_initial_waypoint(target_x_pos,source_x_pos,target_y_pos,source_y_pos)
+        ET.SubElement(
+            od_target_label,
+            f"{{{dc_ns}}}Bounds",
+            x=str(position[0]),
+            y=str(position[1]),
+            width="26",
+            height="18"
+        )
+
     # --- Write XML to File ---
     # Pretty print the XML using lxml's tostring with pretty_print=True
     # and ensure UTF-8 encoding with XML declaration.
@@ -949,7 +984,7 @@ def offset_y_coordinates_in_bpmn(file_path, y_offset):  # Changed 'x_offset' to 
         print(f"No y-coordinates found or modified in '{file_path}'. No new file was written.")  # Changed 'x' to 'y'
 
 
-def merge_two_bpmn_files(input_file_path, target_file_path, is_empty=False):
+def merge_two_bpmn_files_old(input_file_path, target_file_path, is_empty=False):
     parser = ET.XMLParser(remove_blank_text=True)
 
     # Define common BPMN namespaces for consistent use
@@ -1087,9 +1122,123 @@ def merge_two_bpmn_files(input_file_path, target_file_path, is_empty=False):
         print(f"No specific BPMN elements found or merged. '{target_file_path}' remains unchanged.")
 
 
+def merge_two_bpmn_files(input_file_path, target_file_path, is_empty=False):
+    BPMN_NS = "http://www.omg.org/spec/BPMN/20100524/MODEL"
+    BPMNDI_NS = "http://www.omg.org/spec/BPMN/20100524/DI"
+
+    ET.register_namespace('bpmn', BPMN_NS)
+    ET.register_namespace('bpmndi', BPMNDI_NS)
+    parser = ET.XMLParser(remove_blank_text=True)
+
+    # --- Handle `is_empty=True` case (direct copy) ---
+    if is_empty:
+        try:
+            input_tree = ET.parse(input_file_path, parser)
+            input_tree.write(target_file_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
+            print(f"Successfully copied '{input_file_path}' to '{target_file_path}' (target was empty).")
+            return
+        except Exception as e:
+            raise IOError(f"Error copying '{input_file_path}' to '{target_file_path}': {e}")
+
+    # --- Begin granular BPMN merge ---
+
+    # Step 1: Parse the input file and find its root <definitions> element.
+    try:
+        input_tree = ET.parse(input_file_path, parser)
+        input_definitions = input_tree.getroot()
+        if input_definitions.tag != f"{{{BPMN_NS}}}definitions":
+            input_definitions = input_definitions.find(f"{{{BPMN_NS}}}definitions")
+        if input_definitions is None:
+            raise ValueError("No <bpmn:definitions> element found.")
+    except Exception as e:
+
+        return
+
+    # Step 2: Parse the target file and find its root <definitions> element.
+    try:
+        target_tree = ET.parse(target_file_path, parser)
+        target_definitions = target_tree.getroot()
+        if target_definitions.tag != f"{{{BPMN_NS}}}definitions":
+            target_definitions = target_definitions.find(f"{{{BPMN_NS}}}definitions")
+        if target_definitions is None:
+            raise ValueError("No <bpmn:definitions> element found.")
+    except (FileNotFoundError, ET.ParseError) as e:
+        print(
+            f"Warning: Target file '{target_file_path}' not found or is invalid ({e}). Copying input file to target path.")
+        input_tree.write(target_file_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
+        return
+    except Exception as e:
+        print(
+            f"Error: Could not parse or find definitions in target file '{target_file_path}'. Merge aborted. Details: {e}")
+        return
+
+    # --- Step 3: Find the primary merge points in the target file ---
+    target_process = target_definitions.find(f"{{{BPMN_NS}}}process")
+    target_diagram = target_definitions.find(f"{{{BPMNDI_NS}}}BPMNDiagram")
+
+    if target_process is None:
+        print(f"Error: No <bpmn:process> element found in target file '{target_file_path}'. Cannot merge process logic.")
+        return
+    if target_diagram is None:
+        print(f"Error: No <bpmndi:BPMNDiagram> element found in target file '{target_file_path}'. Cannot merge diagram layout.")
+        return
+
+    target_plane = target_diagram.find(f"{{{BPMNDI_NS}}}BPMNPlane")
+    if target_plane is None:
+        return
+
+    # --- Step 4: Collect all elements to be merged from the input file ---
+    process_children_to_merge = []
+    plane_children_to_merge = []
+    other_definitions_to_merge = []
+
+    for element in input_definitions:
+        if element.tag == f"{{{BPMN_NS}}}process":
+            process_children_to_merge.extend(list(element))
+        elif element.tag == f"{{{BPMNDI_NS}}}BPMNDiagram":
+            input_plane = element.find(f"{{{BPMNDI_NS}}}BPMNPlane")
+            if input_plane is not None:
+                plane_children_to_merge.extend(list(input_plane))
+        else:
+            # Collect other definitions like collaboration, message, etc.
+            other_definitions_to_merge.append(element)
+
+    # --- Step 5: Perform the merge by appending the collected elements ---
+    total_merged_count = 0
+    if process_children_to_merge:
+        print(f"Merging {len(process_children_to_merge)} child element(s) into the target <bpmn:process>.")
+        for child in process_children_to_merge:
+            target_process.append(child)
+        total_merged_count += len(process_children_to_merge)
+
+    if plane_children_to_merge:
+        print(f"Merging {len(plane_children_to_merge)} diagram element(s) into the target <bpmndi:BPMNPlane>.")
+        for child in plane_children_to_merge:
+            target_plane.append(child)
+        total_merged_count += len(plane_children_to_merge)
+
+    if other_definitions_to_merge:
+        print(f"Merging {len(other_definitions_to_merge)} other top-level definition(s).")
+        for definition in other_definitions_to_merge:
+            target_definitions.append(definition)
+        total_merged_count += len(other_definitions_to_merge)
+
+    # --- Step 6: Save the result ---
+    if total_merged_count > 0:
+        target_tree.write(target_file_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
+        print(f"Successfully completed granular merge into '{target_file_path}'.")
+        print(f"Total elements added: {total_merged_count}.")
+        print(
+            "IMPORTANT: This merge does NOT handle ID conflicts. The resulting BPMN file might be invalid if element IDs from the source file already exist in the target.")
+    else:
+        print(f"No new elements were merged. '{target_file_path}' remains unchanged.")
+
+
 def merge_bpmn_files_to_fragment():
     folder_path = Path('generated_data/flattened')
     file_paths = list(folder_path.glob('*.bpmn'))
+
+    PROCESS_OFFSET = 120
 
     with open('fragments.bpmn', 'w') as f:
         pass
@@ -1099,8 +1248,38 @@ def merge_bpmn_files_to_fragment():
         if index == 0:
             merge_two_bpmn_files(file_path, 'fragments.bpmn', True)
         else:
-            offset = calculate_y_coordinate_range('fragments.bpmn') + 50
+            offset = calculate_y_coordinate_range('fragments.bpmn') + PROCESS_OFFSET
             offset_y_coordinates_in_bpmn(file_path, offset)
             merge_two_bpmn_files(file_path, 'fragments.bpmn', False)
             print(file_path)
 
+def create_fcm_zip():
+    file_paths = [
+        'dataModel.xml',
+        'goalState.xml',
+        'fragments.bpmn',
+        'olcs.xml'
+    ]
+    zip_name = 'fcm_js.zip'
+
+    try:
+        with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in file_paths:
+                if os.path.exists(file_path):
+                    zipf.write(file_path, os.path.basename(file_path))
+        print(f"Successfully created {zip_name}")
+        return os.path.abspath(zip_name)
+    except Exception as e:
+        print(f"An error occurred while zipping files: {e}")
+        return None
+
+# Calculates offset for an association label with source and target waypoints
+def offset_initial_waypoint(source_x, target_x, source_y, target_y):
+    offset = 42
+    dx = target_x - source_x
+    dy = target_y - source_y
+    distance = math.hypot(dx, dy)
+    scale = offset / distance
+    x = source_x + dx * scale
+    y = source_y + dy * scale
+    return x, y

@@ -18,7 +18,7 @@ TIEBREAKER_LIST = list()
 
 def main():
     #sind in order-management.json die oids in ocel.object_changes mit types verwechselt worden?
-    ocel = pm4py.read_ocel2('./data/order-management.json')
+    #ocel = pm4py.read_ocel2('./data/order-management.json')
     #print(set(ocel.objects['ocel:type'].values))
 
     #ocel = pm4py.read_ocel('./data/running-example.jsonocel')
@@ -26,9 +26,9 @@ def main():
     #ocel = pm4py.read_ocel2('./data/ocel2-p2p.json')
     #ocel = pm4py.read_ocel('./data/p2p.jsonocel')
 
-    xmlplot.merge_bpmn_files_to_fragment()
-    return
-
+    ocel = read_ocel()
+    if ocel is None:
+        return
     obj_ids = xmlplot.generate_object_ids(ocel)
     print(obj_ids)
     generate_lifecycles(ocel, obj_ids)
@@ -37,20 +37,20 @@ def main():
 
 
     #lc_data = mine_totem(ocel, 0.9)
-    #ocel = read_ocel()
-    #if ocel is None:
-    #    return
+
 
     set_tiebreaker(ocel)
     totem = mine_totem(ocel, 0.9)
     xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
-    #generate_uml_diagram(totem)
+    generate_uml_diagram(totem)
     fragments = apply_fragmentation(ocel, totem)
     flatten_save_fragments(ocel, fragments)
     #flatten_save_ocel(ocel)
     obj_graphs = get_object_graphs(ocel)
     connected_object_activity_graph = get_connected_activity_object_states(ocel, obj_graphs)
     xmlplot.finish_bpmn(ocel, connected_object_activity_graph, fragments)
+    xmlplot.merge_bpmn_files_to_fragment()
+    xmlplot.create_fcm_zip()
     return
 
     for activity, values in connected_object_activity_graph.items():
@@ -185,8 +185,8 @@ def generate_uml_diagram(lc_data: dict[str, dict[str, tuple[str, str]]], output_
     print("XML written to uml_diagram.xml")
 
     # Save UML diagram as PNG
-    #dot.render(output_filename, cleanup=True)
-    #print(f"UML Diagram saved as {output_filename}.png")
+    dot.render(output_filename, cleanup=True)
+    print(f"UML Diagram saved as {output_filename}.png")
 
 
 def wrap_labels(label):
