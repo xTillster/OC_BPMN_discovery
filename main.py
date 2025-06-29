@@ -30,7 +30,6 @@ def main():
     if ocel is None:
         return
     obj_ids = xmlplot.generate_object_ids(ocel)
-    print(obj_ids)
     generate_lifecycles(ocel, obj_ids)
 
     #generate_uml_diagram(lc_data)
@@ -42,7 +41,7 @@ def main():
     set_tiebreaker(ocel)
     totem = mine_totem(ocel, 0.9)
     xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
-    generate_uml_diagram(totem)
+    #generate_uml_diagram(totem)
     fragments = apply_fragmentation(ocel, totem)
     flatten_save_fragments(ocel, fragments)
     #flatten_save_ocel(ocel)
@@ -273,22 +272,6 @@ def first_occurrence(ocel):
     return first_object_occurrence
 
 
-# find the timestamp for the first occurrence of each oid
-def first_occurrence_relations(ocel:OCEL):
-    first_object_occurrence : dict[str, datetime] = dict()
-
-    for index, row in ocel.relations.iterrows():
-        if row['ocel:oid'] not in first_object_occurrence:
-            first_object_occurrence[row['ocel:oid']] = row['ocel:timestamp'].tz_localize(None)
-            continue
-
-        if first_object_occurrence[row['ocel:oid']] > row['ocel:timestamp'].tz_localize(None):
-            first_object_occurrence[row['ocel:oid']] = row['ocel:timestamp'].tz_localize(None)
-
-    return first_object_occurrence
-
-
-
 def get_sorted_oid_paths(ocel):
     object_paths_new : dict[str, list[tuple[str, datetime]]] = dict()
     object_paths : dict[str, list[str]] = dict()
@@ -303,13 +286,13 @@ def get_sorted_oid_paths(ocel):
 
     for key in object_paths_new:
         object_paths_new[key].sort(key=lambda x: x[1])
-        # todo implement input or output object probably here, maybe add try catch
         if key in first_occurrences.keys():
             if first_occurrences[key] < object_paths_new[key][0][1]:
                 print("in")
                 object_paths_new[key].insert(0, ('init', first_occurrences[key]))
 
         object_paths[key] = [path for path, _ in object_paths_new[key]]
+        object_paths[key].insert(0, 'new')
 
     return object_paths
 

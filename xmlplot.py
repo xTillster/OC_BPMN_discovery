@@ -5,7 +5,6 @@ from lxml import etree as ET
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from matplotlib import pyplot as plt
 from pm4py import OCEL
 
 import os
