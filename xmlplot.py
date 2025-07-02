@@ -36,7 +36,7 @@ def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, de
                                     f'{object_type}\n[{activity}]',
                                     output_count[activity],
                                     dataclass_name=object_type,
-                                    states_list=states,
+                                    states_list=[activity], # Since this is the output, the only state of this data object is the activity
                                     input=False)
             # not every object type has his own fragment
             if object_type in fragments.keys():

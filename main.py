@@ -1,4 +1,3 @@
-import csv
 from datetime import datetime
 
 import uuid
@@ -17,10 +16,7 @@ from totemAlgorithm import mine_totem
 TIEBREAKER_LIST = list()
 
 def main():
-    #sind in order-management.json die oids in ocel.object_changes mit types verwechselt worden?
     #ocel = pm4py.read_ocel2('./data/order-management.json')
-    #print(set(ocel.objects['ocel:type'].values))
-
     #ocel = pm4py.read_ocel('./data/running-example.jsonocel')
     #ocel = pm4py.read_ocel2('./data/ContainerLogistics.json')
     #ocel = pm4py.read_ocel2('./data/ocel2-p2p.json')
@@ -30,18 +26,10 @@ def main():
     if ocel is None:
         return
     obj_ids = xmlplot.generate_object_ids(ocel)
-    generate_lifecycles(ocel, obj_ids)
-
-    #generate_uml_diagram(lc_data)
-
-
-    #lc_data = mine_totem(ocel, 0.9)
-
-
+    object_lifecycles = generate_lifecycles(ocel, obj_ids)
     set_tiebreaker(ocel)
     totem = mine_totem(ocel, 0.9)
     xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
-    #generate_uml_diagram(totem)
     fragments = apply_fragmentation(ocel, totem)
     flatten_save_fragments(ocel, fragments)
     #flatten_save_ocel(ocel)
@@ -52,44 +40,7 @@ def main():
     xmlplot.create_fcm_zip()
     return
 
-    for activity, values in connected_object_activity_graph.items():
-        print(f"Activity {activity} interacts with following object types: ")
-        for object_type, states in values.items():
-            print(f"   {object_type}: {states}")
-
-    return
-
-    print(obj_graphs.keys())
-    print()
-
-    for key, g in obj_graphs.items():
-        print(key)
-        print(g.nodes)
-        for node in g.nodes:
-            print(f"{node} has predecessors (Vorgänger): {list(g.predecessors(node))}")
-            print(f"{node} has successors (Nachfolger): {list(g.successors(node))}")
-
-    return
-    set_tiebreaker(ocel)
-    #totem = mine_totem(ocel, 0.9)
-
-    generate_uml_diagram(totem)
-    fragments = apply_fragmentation(ocel, totem)
-
-    for object_type, fragment in fragments.items():
-        print(f"{object_type}: {fragment}")
-
-    flatten_save_fragments(ocel, fragments)
-    flatten_save_ocel(ocel)
-    return
-
-
-    print(totem)
-
-
-    #lc_data = mine_totem(ocel, 0.9)
-    print(lc_data)
-
+    # Example TOTeM output for the UML diagram
     lc_data = {
         "Container": {
             "Transport Document": ("1..*", "1..*"),
@@ -102,43 +53,6 @@ def main():
             "Customer Order": ("1..*", "1")
         }
     }
-
-
-
-    generate_uml_diagram(lc_data)
-
-    generate_lifecycles(ocel, obj_ids)
-
-    return
-    #print(ocel.events[ocel.events['ocel:eid'] == 'place_o-990001'])
-    #print(ocel.relations.dtypes)
-    #print(ocel.relations[ocel.relations['ocel:eid'] == 'place_o-990001'][['ocel:eid', 'ocel:activity','ocel:oid', 'ocel:type']])
-    #ocpn = pm4py.discover_oc_petri_net(ocel)
-    #pm4py.save_vis_ocpn(ocpn, './data/ocpn.png')
-    print(ocel.events['ocel:activity'].values.unique())
-    print('------------- events --------------')
-    print(ocel.events.dtypes)
-    print('------------- relations -----------')
-    print(ocel.relations.dtypes)
-    print('------------- objects -------------')
-    print(ocel.objects.dtypes)
-    print('------------- o2o -----------------')
-    print(ocel.o2o.dtypes)
-
-
-    #todo: how can I represent "new" state?/ is new always the first state?
-    #if first object occurrence is input in activity -> should be "new", if it is output -> should be activity name
-    #what happens when activity consumes the object and doesn't output it?
-    object_lifecycles : dict[str, set[str]] = dict()
-
-    for index, row in ocel.relations.iterrows():
-        if row['ocel:type'] not in object_lifecycles:
-            object_lifecycles[row['ocel:type']] = set()
-
-        object_lifecycles[row['ocel:type']].add(row['ocel:activity'])
-
-    for key, entry in object_lifecycles.items():
-        print(key, ": ", entry)
 
 
 def generate_uml_diagram(lc_data: dict[str, dict[str, tuple[str, str]]], output_filename="generated_data/uml_diagram"):
@@ -226,7 +140,6 @@ def flatten_save_fragments(ocel, fragments):
         flattened_ocel = pm4py.ocel_flattening(ocel, object_type)
 
         # Mask that returns true if the activity with instance ocel:eid belongs to the fragment of the current object_type
-        # fragment_mask = pd.DataFrame(eid_to_activity[flattened_ocel['ocel:eid']] in fragments[object_type])
         fragment_mask = flattened_ocel['ocel:eid'].map(eid_to_activity).isin(fragments[object_type])
 
         print(f"'{object_type}' fragment initial length: {len(flattened_ocel.index)}")
@@ -289,6 +202,8 @@ def get_sorted_oid_paths(ocel):
         if key in first_occurrences.keys():
             if first_occurrences[key] < object_paths_new[key][0][1]:
                 print("in")
+                print("embarrassing")
+                return
                 object_paths_new[key].insert(0, ('init', first_occurrences[key]))
 
         object_paths[key] = [path for path, _ in object_paths_new[key]]
@@ -353,13 +268,7 @@ def generate_lifecycles(ocel, obj_ids):
         for transition in G.edges:
             print(transition)
 
-    with open("generated_data/graph_edges.csv", "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["ObjectType", "Source", "Target"])
-
-        for obj_type, G in nx_graphs.items():
-            for edge in G.edges():
-                writer.writerow([obj_type, edge[0], edge[1]])
+    return nx_graphs
 
 
 def get_all_activities_without_objects(ocel: OCEL):
@@ -632,7 +541,6 @@ def apply_fragmentation(ocel, totem):
                     continue
 
                 # Found a one-to-one relationship
-                # TODO: is this just tie breaker or do I have to check for temporal occurrence?
                 tiebreaker_fragment = apply_tiebreaker(activity, connected_object_types)
                 fragment_activities[tiebreaker_fragment].add(activity)
                 print(f"Activity '{activity}' was added to the '{tiebreaker_fragment}' fragment by 'one_to_one' tiebreaker.")
