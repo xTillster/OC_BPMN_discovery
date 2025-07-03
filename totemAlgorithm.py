@@ -330,7 +330,7 @@ def mine_totem(ocel, tau=1):
 
     # new
     # OC-BPMN UML class diagram data
-    lc_data : dict[str, dict[str, tuple[str, str]]] = dict()
+    uml_diagram : dict[str, dict[str, tuple[str, str]]] = dict()
     additional_t2t = {}
     merged_type_relations = type_relations.union(additional_t2t)
 
@@ -339,11 +339,9 @@ def mine_totem(ocel, tau=1):
         lc = get_most_precise_lc((t1, t2), tau, h_log_cardinalities)
         lc_i = get_most_precise_lc((t2, t1), tau, h_log_cardinalities)
 
-        #print(f"Putting {t1} -> {t2} LC: {lc_i} - {lc}")
-        #print(lc_data)
-        if t1 not in lc_data:
-            lc_data[t1] = dict()
+        if t1 not in uml_diagram:
+            uml_diagram[t1] = dict()
 
-        lc_data[t1][t2] = (lc_i, lc)
+        uml_diagram[t1][t2] = (lc_i, lc)
 
-    return lc_data
+    return uml_diagram

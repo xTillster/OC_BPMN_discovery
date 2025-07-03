@@ -26,13 +26,12 @@ def main():
     if ocel is None:
         return
     obj_ids = xmlplot.generate_object_ids(ocel)
-    object_lifecycles = generate_lifecycles(ocel, obj_ids)
     set_tiebreaker(ocel)
+    object_lifecycles = generate_lifecycles(ocel, obj_ids)
     totem = mine_totem(ocel, 0.9)
-    xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
     fragments = apply_fragmentation(ocel, totem)
     flatten_save_fragments(ocel, fragments)
-    #flatten_save_ocel(ocel)
+    xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
     obj_graphs = get_object_graphs(ocel)
     connected_object_activity_graph = get_connected_activity_object_states(ocel, obj_graphs)
     xmlplot.finish_bpmn(ocel, connected_object_activity_graph, fragments)
@@ -58,7 +57,6 @@ def main():
 def generate_uml_diagram(lc_data: dict[str, dict[str, tuple[str, str]]], output_filename="generated_data/uml_diagram"):
     dot = Graph(format="png", engine="dot")
     #dot.attr(splines="line", ranksep="1.0", nodesep="0.8")
-    #todo zählen
     dot.attr(splines="ortho", ranksep="1.5", nodesep="1.2", concentrate="true", mindist="0.5")
     dot.attr(rankdir="TB")
 
@@ -111,16 +109,6 @@ def wrap_labels(label):
     mid = len(words) // 2  # Find the middle word
     return "\n".join([" ".join(words[:mid]), " ".join(words[mid:])])
 
-
-def flatten_save_ocel(ocel):
-    ocel_object_types = ocel.objects[ocel.object_type_column].values.unique()
-
-    for object_type in ocel_object_types:
-        flattened_ocel = pm4py.ocel_flattening(ocel, object_type)
-        bpmn = pm4py.discover_bpmn_inductive(flattened_ocel)
-
-        pm4py.write_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.bpmn")
-        pm4py.save_vis_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.png")
 
 def flatten_save_fragments(ocel, fragments):
     ocel_object_types = ocel.objects[ocel.object_type_column].values.unique()
@@ -189,8 +177,6 @@ def get_sorted_oid_paths(ocel):
     object_paths_new : dict[str, list[tuple[str, datetime]]] = dict()
     object_paths : dict[str, list[str]] = dict()
 
-    first_occurrences = first_occurrence(ocel)
-
     for index, row in ocel.relations.iterrows():
         if row['ocel:oid'] not in object_paths_new:
             object_paths_new[row['ocel:oid']] = [(row['ocel:activity'], row['ocel:timestamp'].tz_localize(None))]
@@ -199,13 +185,6 @@ def get_sorted_oid_paths(ocel):
 
     for key in object_paths_new:
         object_paths_new[key].sort(key=lambda x: x[1])
-        if key in first_occurrences.keys():
-            if first_occurrences[key] < object_paths_new[key][0][1]:
-                print("in")
-                print("embarrassing")
-                return
-                object_paths_new[key].insert(0, ('init', first_occurrences[key]))
-
         object_paths[key] = [path for path, _ in object_paths_new[key]]
         object_paths[key].insert(0, 'new')
 
@@ -227,6 +206,7 @@ def create_nx_graph(graph_dict):
             G.add_edge(node, neighbor)
     return G
 
+# additional visualization for the UML diagram
 def draw_and_save_graph(G, filename):
     plt.figure(figsize=(8, 6))
     #pos = nx.spring_layout(G)  # Position nodes for visualization
@@ -258,7 +238,9 @@ def generate_lifecycles(ocel, obj_ids):
         obj_type = object_id_to_type[obj_id]
         type_to_paths[obj_type].append(path)
 
+    # transforms the different state paths to graph edge pairs
     type_to_graph = {obj_type: build_graph(paths) for obj_type, paths in type_to_paths.items()}
+    # builds the graphs from the edges
     nx_graphs = {obj_type: create_nx_graph(graph) for obj_type, graph in type_to_graph.items()}
 
     xmlplot.create_lifecycle_xml(type_to_paths, obj_ids)
@@ -277,7 +259,6 @@ def get_all_activities_without_objects(ocel: OCEL):
         if row['ocel:activity'] in activities:
             activities.remove(row['ocel:activity'])
     return activities
-
 
 
 def get_convergent(ocel):
@@ -412,12 +393,6 @@ def get_unique_activities(ocel):
 
     return unique_activities
 
-def build_oc_bpmn(ocel):
-    totem = mine_totem(ocel, 0.9)
-    generate_uml_diagram(totem)
-    generate_lifecycles(ocel)
-    apply_fragmentation(ocel, totem)
-
 def helper_fragments(ocel: OCEL):
     fragments = defaultdict(set)
     oid_to_object_type = defaultdict(str)
@@ -440,8 +415,6 @@ def apply_fragmentation(ocel, totem):
 
     # Map each object type (fragment) to all occurring activities within the fragment
     fragment_activities = defaultdict(set)
-    #todo: assumes each object type is actually present in the log and not just listed as possible
-    #object_types = set(ocel.objects[ocel.object_type_column].values)
 
     # Add activities that interact with only 1 object type
     for activity, object_type in unique_activities.items():
