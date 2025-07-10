@@ -1,0 +1,1 @@
+This algorithm is designed to be used in a IDE like PyCharm. Starting the algorithm requires running the main file with an up-to-date Python version. The output zip file will be placed in the working directory.
