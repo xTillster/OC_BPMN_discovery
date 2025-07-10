@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from pathlib import Path
 import uuid
 import xml.etree.ElementTree as ET
 import networkx as nx
@@ -16,19 +17,14 @@ from totemAlgorithm import mine_totem
 TIEBREAKER_LIST = list()
 
 def main():
-    #ocel = pm4py.read_ocel2('./data/order-management.json')
-    #ocel = pm4py.read_ocel('./data/running-example.jsonocel')
-    #ocel = pm4py.read_ocel2('./data/ContainerLogistics.json')
-    #ocel = pm4py.read_ocel2('./data/ocel2-p2p.json')
-    #ocel = pm4py.read_ocel('./data/p2p.jsonocel')
-
     ocel = read_ocel()
     if ocel is None:
         return
     obj_ids = xmlplot.generate_object_ids(ocel)
     set_tiebreaker(ocel)
     object_lifecycles = generate_lifecycles(ocel, obj_ids)
-    totem = mine_totem(ocel, 0.9)
+    totem = mine_totem(ocel, 1)
+    #generate_uml_diagram(totem)
     fragments = apply_fragmentation(ocel, totem)
     flatten_save_fragments(ocel, fragments)
     xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
@@ -38,20 +34,6 @@ def main():
     xmlplot.merge_bpmn_files_to_fragment()
     xmlplot.create_fcm_zip()
     return
-
-    # Example TOTeM output for the UML diagram
-    lc_data = {
-        "Container": {
-            "Transport Document": ("1..*", "1..*"),
-            "Vehicle": ("1..*", "1")
-        },
-        "Vehicle": {
-            "Transport Document": ("1..*", "1..*")
-        },
-        "Transport Document": {
-            "Customer Order": ("1..*", "1")
-        }
-    }
 
 
 def generate_uml_diagram(lc_data: dict[str, dict[str, tuple[str, str]]], output_filename="generated_data/uml_diagram"):
@@ -112,6 +94,12 @@ def wrap_labels(label):
 
 def flatten_save_fragments(ocel, fragments):
     ocel_object_types = ocel.objects[ocel.object_type_column].values.unique()
+
+    directory = Path('./generated_data/flattened')
+
+    for file in directory.iterdir():
+        if file.is_file():
+            file.unlink()
 
     # Create a lookup for event ID -> activity type
     eid_to_activity = {}
@@ -318,37 +306,6 @@ def get_divergent(ocel):
         for activity_type, event_ids in activities.items():
             if len(event_ids) > 1:
                 # Object `oid` is involved in multiple distinct events of type `activity_type`
-                object_type_to_divergent[obj_type].add(activity_type)
-
-    return object_type_to_divergent
-
-def get_divergent_new(ocel):
-    # Mapping from object type to set of divergent activity types
-    object_type_to_divergent = defaultdict(set)
-    # Temporary mapping from object ID to a set of event IDs for each activity type
-    object_activity_events = defaultdict(lambda: defaultdict(set))
-
-    # Gather events per object per activity type
-    for index, row in ocel.relations.iterrows():
-        oid = row['ocel:oid']
-        activity = row['ocel:activity']
-        eid = row['ocel:eid']
-        object_activity_events[oid][activity].add(eid)
-
-    # Lookup for object ID -> object type
-    oid_to_type = {}
-    for index, row in ocel.objects.iterrows():
-        oid_to_type[row['ocel:oid']] = row['ocel:type']
-
-    # Identify divergence: object types with activity types that appear multiple times for the same object
-    for oid, activities in object_activity_events.items():
-        obj_type = oid_to_type.get(oid)
-        if obj_type is None:
-            print(f"Object type of ocel:oid '{oid}' not found.")
-            continue
-        for activity_type, event_ids in activities.items():
-            if len(event_ids) > 1:
-                # Object `oid` is involved in multiple distinct events of type `activity_type`
                 object_type_to_divergent[activity_type].add(obj_type)
 
     return object_type_to_divergent
@@ -408,7 +365,7 @@ def helper_fragments(ocel: OCEL):
 def apply_fragmentation(ocel, totem):
     activities_without_objects = get_all_activities_without_objects(ocel)
     convergent_activities = get_convergent(ocel)
-    divergent_objects = get_divergent_new(ocel)
+    divergent_objects = get_divergent(ocel)
     unique_activities = get_unique_activities(ocel)
     all_activities = set(ocel.events['ocel:activity'])
     activity_connected_object_types = get_activity_objects(ocel)
@@ -418,6 +375,7 @@ def apply_fragmentation(ocel, totem):
 
     # Add activities that interact with only 1 object type
     for activity, object_type in unique_activities.items():
+        print(f"Activity '{activity}' was added to {object_type} fragment because it is the only object type interaction.")
         fragment_activities[object_type].add(activity)
 
     for activity in all_activities:
@@ -544,13 +502,10 @@ def apply_fragmentation(ocel, totem):
                 # Didn't find the many-to-many tuple yet
                 if not (relationship.__contains__(object_type_1) and relationship.__contains__(object_type_2)):
                     continue
-                # (object_type1, object_type2, (kardinalitäten))
+                # (object_type1, object_type2, (cardinalities))
                 # Found a many-to-many relationship
                 # Check if both have 0 as lower boundary
                 if relationship[2][0].__contains__('0') and relationship[2][1].__contains__('0'):
-                    # tiebreaker_fragment = apply_tiebreaker(activity, connected_object_types)
-                    # fragment_activities[tiebreaker_fragment].add(activity)
-                    # print(f"Activity '{activity}' was added to the '{tiebreaker_fragment}' fragment by 'many-to-many' tiebreaker.")
                     # Tiebreaker will be performed later
                     continue
 
@@ -570,9 +525,6 @@ def apply_fragmentation(ocel, totem):
 
             if found_relationship_flag:
                 continue
-
-            # TODO do I need this one?
-            #continue
 
         # Tiebreak
         if not_conv_not_div_counter == 0:
