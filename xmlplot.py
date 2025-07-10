@@ -13,7 +13,11 @@ import zipfile
 state_name_to_ids = defaultdict(lambda: defaultdict(str))
 object_name_to_ids = dict()
 
-def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, defaultdict[str, set]], fragments: defaultdict[str, set]):
+def finish_bpmn(ocel: OCEL, fragments: defaultdict[str, set], totem, object_lifecycles):
+    obj_graphs = get_object_graphs(ocel)
+    connected_object_activity_graph = get_connected_activity_object_states(ocel, obj_graphs)
+    generate_object_ids(ocel)
+
     input_count = defaultdict(int)
     output_count = defaultdict(int)
 
@@ -28,19 +32,18 @@ def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, de
     for activity, values in connected_object_activity_graph.items():
         for object_type, states in values.items():
             if len(reversed_fragments[activity]) == 0:
-                print("can this even happen?")
                 continue
             output_count[activity] += 1
-            add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{reversed_fragments[activity]}.bpmn',
+            add_data_object_to_bpmn(f'generated_data/fragments/bpmn_{reversed_fragments[activity]}.bpmn',
                                     activity,
                                     f'{object_type}\n[{activity}]',
                                     output_count[activity],
                                     dataclass_name=object_type,
-                                    states_list=[activity], # Since this is the output, the only state of this data object is the activity
+                                    states_list=[activity],  # Since this is the output, the only state of this data object is the activity
                                     input=False)
             # not every object type has his own fragment
             if object_type in fragments.keys():
-                remove_start_and_end_events(f'./generated_data/flattened/bpmn_{object_type}.bpmn')
+                remove_start_and_end_events(f'generated_data/fragments/bpmn_{object_type}.bpmn')
 
     # Generate input data objects
     for activity, values in connected_object_activity_graph.items():
@@ -52,13 +55,19 @@ def finish_bpmn(ocel: OCEL, connected_object_activity_graph: defaultdict[str, de
             else:
                 states_name = "[" + " | ".join(states) + "]"
             input_count[activity] += 1
-            add_data_object_to_bpmn(f'./generated_data/flattened/bpmn_{reversed_fragments[activity]}.bpmn',
+            add_data_object_to_bpmn(f'generated_data/fragments/bpmn_{reversed_fragments[activity]}.bpmn',
                                     activity,
                                     f'{object_type}\n{states_name}',
                                     input_count[activity],
                                     dataclass_name=object_type,
                                     states_list=states,
                                     input=True)
+
+
+    create_lifecycle_xml(object_lifecycles)
+    create_uml_xml(totem,"dataModel.xml")
+    merge_bpmn_files_to_fragment()
+    create_fcm_zip()
 
 
 def add_data_object_to_bpmn(file_path, activity_name, data_object_name, in_out_counter,
@@ -254,7 +263,7 @@ def add_data_object_to_bpmn(file_path, activity_name, data_object_name, in_out_c
     # Save file
     output_path = output_path or file_path
     tree.write(output_path, pretty_print=True, xml_declaration=True, encoding='UTF-8')
-    print(f"Data object '{data_object_name}' added/updated for task '{activity_name}'.")
+    #print(f"Data object '{data_object_name}' added/updated for task '{activity_name}'.")
 
 
 def remove_start_and_end_events(file_path, output_path=None):
@@ -313,14 +322,11 @@ def remove_start_and_end_events(file_path, output_path=None):
 def generate_unique_id(prefix):
         return f"{prefix}_{uuid.uuid4().hex[:24]}"
 
-def create_lifecycle_xml(type_to_paths,object_name_to_id, filename = "olcs.xml"):
+def create_lifecycle_xml(nx_graphs, filename = "olcs.xml"):
     global state_name_to_ids
     olcs = list(dict())
 
     SCALE_FACTOR = 250
-
-    type_to_graph = {obj_type: build_graph(paths) for obj_type, paths in type_to_paths.items()}
-    nx_graphs = {obj_type: create_nx_graph(graph) for obj_type, graph in type_to_graph.items()}
 
     # generates uuids for each state as well
     for obj_type, G in nx_graphs.items():
@@ -343,7 +349,7 @@ def create_lifecycle_xml(type_to_paths,object_name_to_id, filename = "olcs.xml")
 
     for olc in olcs:
         olc_id = generate_unique_id("Olc")
-        class_ref = object_name_to_id.get(olc['name'])
+        class_ref = object_name_to_ids.get(olc['name'])
 
         olc_elem = ET.SubElement(root, "{http://bptlab/schema/olc}olc", {
             "name": olc['name'],
@@ -374,6 +380,7 @@ def create_lifecycle_xml(type_to_paths,object_name_to_id, filename = "olcs.xml")
 
     tree = ET.ElementTree(root)
     tree.write(filename, encoding="utf-8", xml_declaration=True)
+    print("Object lifecycle xml saved to ", filename)
 
 def build_graph(paths):
     graph = defaultdict(set)
@@ -398,7 +405,7 @@ def get_uml_positions(lc_data: dict[str, dict[str, tuple[str, str]]]):
     return pos
 
 
-def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xml"):
+def create_uml_xml(lc_data, output_filename):
     positions = get_uml_positions(lc_data)
 
     # Define XML namespaces for the document
@@ -434,8 +441,8 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
 
     def get_unique_object_id(class_name):
         nonlocal obj_id_counter
-        if class_name in object_name_to_id:
-            return object_name_to_id[class_name]
+        if class_name in object_name_to_ids:
+            return object_name_to_ids[class_name]
         new_id = f"Object_{obj_id_counter}"
         obj_id_counter += 1
         return new_id
@@ -457,8 +464,6 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
         if class_name not in class_name_to_id: # Avoid re-assigning if already in object_name_to_id
             class_name_to_id[class_name] = get_unique_object_id(class_name)
 
-    # --- Step 2: Create <od:class> elements and prepare association data ---
-    # A dict to store lists of associations for each source class
     class_associations_refs = {cls_name: [] for cls_name in class_name_to_id}
 
     for source_class_name, target_map in lc_data.items():
@@ -473,11 +478,9 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
                 (source_class_name, target_class_name, source_cardinality,
                  target_cardinality, source_class_id, target_class_id, association_id)
             )
-            # Add the association reference to the source class
             class_associations_refs[source_class_name].append(association_id)
 
-    # Now, add the class elements to od_board
-    for class_name in sorted(class_name_to_id.keys()): # Sort for consistent output order
+    for class_name in sorted(class_name_to_id.keys()):
         class_id = class_name_to_id[class_name]
         class_elem = ET.SubElement(
             od_board,
@@ -487,11 +490,9 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             attributeValues="",
             type="od:Class"
         )
-        # Add association references if this class is a source for any association
         for assoc_ref_id in class_associations_refs[class_name]:
             ET.SubElement(class_elem, f"{{{od_ns}}}associations").text = assoc_ref_id
 
-    # --- Step 3: Create <od:association> elements ---
     for source_class_name, target_class_name, source_card, target_card, \
         source_class_id, target_class_id, association_id in association_details:
         ET.SubElement(
@@ -505,27 +506,23 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             targetRef=target_class_id
         )
 
-    # --- Step 4: Create <odDi:odShape> (Class Shapes) and <odDi:association> (Waypoints) elements ---
-    for class_name in sorted(class_name_to_id.keys()): # Sort for consistent output order
+    for class_name in sorted(class_name_to_id.keys()):
         class_id = class_name_to_id[class_name]
 
-        # Get positions and scale them
-        raw_x, raw_y = positions.get(class_name, (0, 0)) # Default to (0,0) if no position
-        print(f"raw_x: {raw_x}, raw_y: {raw_y}")
-        # Convert networkx-like positions [-1, 1] to pixel coordinates
-        # Adjust for scaling and centering; (0,0) becomes (X_OFFSET, Y_OFFSET)
-        # Assuming raw_x and raw_y are in [-1, 1] range approximately
+        raw_x, raw_y = positions.get(class_name, (0, 0))
+
+        # Convert positions [-1, 1] to pixel coordinates, adjust for scaling
         x_pos = round(raw_x * SCALE_FACTOR + X_OFFSET)
         y_pos = round(raw_y * SCALE_FACTOR + Y_OFFSET)
 
-        # Create odDi:odShape for the class
+
         od_di_shape = ET.SubElement(
             od_di_plane,
             f"{{{odDi_ns}}}odShape",
             id=f"{class_id}_di",
             boardElement=class_id
         )
-        # Add dc:Bounds for position and size
+
         ET.SubElement(
             od_di_shape,
             f"{{{dc_ns}}}Bounds",
@@ -535,16 +532,14 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             height=str(CLASS_HEIGHT)
         )
 
-    # Create <odDi:association> waypoints
+    # Create waypoints
     for source_class_name, target_class_name, _, _, \
         source_class_id, target_class_id, association_id in association_details:
 
-        # Fetch source class position
         source_raw_x, source_raw_y = positions.get(source_class_name, (0, 0))
         source_x_pos = round(source_raw_x * SCALE_FACTOR + X_OFFSET)
         source_y_pos = round(source_raw_y * SCALE_FACTOR + Y_OFFSET)
 
-        # Fetch target class position
         target_raw_x, target_raw_y = positions.get(target_class_name, (0, 0))
         target_x_pos = round(target_raw_x * SCALE_FACTOR + X_OFFSET)
         target_y_pos = round(target_raw_y * SCALE_FACTOR + Y_OFFSET)
@@ -556,7 +551,7 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             id=f"{association_id}_di",
             boardElement=association_id
         )
-        # Add two waypoints: one for source, one for target
+        # Add two waypoints
         ET.SubElement(
             od_di_association,
             f"{{{odDi_ns}}}waypoint",
@@ -570,7 +565,7 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             y=str(target_y_pos)
         )
 
-        # Add two labels: one for source, one for target
+        # Add two labels
         od_source_label = ET.SubElement(
             od_di_association,
             f"{{{odDi_ns}}}odSourceLabel"
@@ -598,9 +593,6 @@ def create_uml_xml(lc_data, object_name_to_id, output_filename="dataModel_new.xm
             height="18"
         )
 
-    # --- Write XML to File ---
-    # Pretty print the XML using lxml's tostring with pretty_print=True
-    # and ensure UTF-8 encoding with XML declaration.
     final_xml_bytes = ET.tostring(
         definitions,
         pretty_print=True,
@@ -643,24 +635,16 @@ def calculate_y_coordinate_range(file_path):
     waypoint_elements = root.xpath(f"//di:waypoint", namespaces=namespaces)
     for wp in waypoint_elements:
         if 'y' in wp.attrib:
-            try:
-                y_coordinates.append(float(wp.get('y')))
-            except ValueError:
-                print(
-                    f"Warning: Could not convert waypoint y-coordinate '{wp.get('y')}' to float.")
+            y_coordinates.append(float(wp.get('y')))
+
 
     # Find y coordinates in <omgdc:Bounds> elements
     bounds_elements = root.xpath(f"//dc:Bounds", namespaces=namespaces)
     for bounds in bounds_elements:
         if 'y' in bounds.attrib:
-            try:
-                y_coordinates.append(float(bounds.get('y')))
-            except ValueError:
-                print(
-                    f"Warning: Could not convert Bounds y-coordinate '{bounds.get('y')}' to float.")
+            y_coordinates.append(float(bounds.get('y')))
 
     if not y_coordinates:
-        print("No 'y' coordinates found in the specified elements.")
         return 0.0
     else:
         min_y = min(y_coordinates)
@@ -764,7 +748,7 @@ def merge_two_bpmn_files(input_file_path, target_file_path, is_empty):
 
 
 def merge_bpmn_files_to_fragment():
-    folder_path = Path('generated_data/flattened')
+    folder_path = Path('generated_data/fragments')
     file_paths = list(folder_path.glob('*.bpmn'))
 
     PROCESS_OFFSET = 120
@@ -773,14 +757,12 @@ def merge_bpmn_files_to_fragment():
         pass
 
     for index, file_path in enumerate(file_paths):
-        print(f"Processing '{file_path}'")
         if index == 0:
             merge_two_bpmn_files(file_path, 'fragments.bpmn', True)
         else:
             offset = calculate_y_coordinate_range('fragments.bpmn') + PROCESS_OFFSET
             offset_y_coordinates_in_bpmn(file_path, offset)
             merge_two_bpmn_files(file_path, 'fragments.bpmn', False)
-            print(file_path)
 
 def create_fcm_zip():
     file_paths = [
@@ -812,3 +794,46 @@ def offset_initial_waypoint(source_x, target_x, source_y, target_y):
     x = source_x + dx * scale
     y = source_y + dy * scale
     return x, y
+
+def get_object_graphs(ocel: OCEL):
+    sorted_ocel = ocel.relations.sort_values(by='ocel:timestamp')
+    obj_states = defaultdict(list)
+    obj_graphs = defaultdict(nx.DiGraph)
+    oid_to_object_type = defaultdict(str)
+
+    for _, row in sorted_ocel.iterrows():
+        if len(obj_states[row['ocel:oid']]) == 0:
+            obj_states[row['ocel:oid']].append('new')
+        obj_states[row['ocel:oid']].append(row['ocel:activity'])
+
+    for _, row in ocel.objects.iterrows():
+        oid_to_object_type[row['ocel:oid']] = row['ocel:type']
+
+    for key, values in obj_states.items():
+        obj_type = oid_to_object_type[key]
+
+        #might error
+        graph = obj_graphs[obj_type]
+
+        if len(values) == 1:
+            graph.add_node(values[0])
+        else:
+            for u, v in zip(values, values[1:]):
+                graph.add_edge(u, v)
+
+    return obj_graphs
+
+def get_connected_activity_object_states(ocel: OCEL, obj_graphs: defaultdict[str, nx.DiGraph]):
+    activities = ocel.events['ocel:activity'].values.unique()
+
+    # first key: activity, second key: connected object types, value: states of these connected object types
+    activity_objects_states = defaultdict(lambda: defaultdict(set))
+
+    for activity in activities:
+        for object_type, g in obj_graphs.items():
+            if activity not in g.nodes:
+                continue
+            object_origins = list(g.predecessors(activity))
+            activity_objects_states[activity][object_type].update(object_origins)
+
+    return activity_objects_states

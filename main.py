@@ -2,14 +2,11 @@ from datetime import datetime
 
 from pathlib import Path
 import uuid
-import xml.etree.ElementTree as ET
 import networkx as nx
 import pm4py
+from pandas.core.interchange.dataframe_protocol import DataFrame
 import xmlplot
-from graphviz import Graph
 from collections import defaultdict
-
-from matplotlib import pyplot as plt
 from pm4py import OCEL
 
 from totemAlgorithm import mine_totem
@@ -20,86 +17,24 @@ def main():
     ocel = read_ocel()
     if ocel is None:
         return
-    obj_ids = xmlplot.generate_object_ids(ocel)
+
+    xmlplot.generate_object_ids(ocel)
     set_tiebreaker(ocel)
-    object_lifecycles = generate_lifecycles(ocel, obj_ids)
+    object_lifecycles = generate_lifecycles(ocel)
     totem = mine_totem(ocel, 1)
-    #generate_uml_diagram(totem)
     fragments = apply_fragmentation(ocel, totem)
-    flatten_save_fragments(ocel, fragments)
-    xmlplot.create_uml_xml(totem,obj_ids,"dataModel.xml")
-    obj_graphs = get_object_graphs(ocel)
-    connected_object_activity_graph = get_connected_activity_object_states(ocel, obj_graphs)
-    xmlplot.finish_bpmn(ocel, connected_object_activity_graph, fragments)
-    xmlplot.merge_bpmn_files_to_fragment()
-    xmlplot.create_fcm_zip()
+    fragment_logs = flatten_save_fragments(ocel, fragments)
+    xmlplot.finish_bpmn(ocel, fragments, totem, object_lifecycles)
     return
 
-
-def generate_uml_diagram(lc_data: dict[str, dict[str, tuple[str, str]]], output_filename="generated_data/uml_diagram"):
-    dot = Graph(format="png", engine="dot")
-    #dot.attr(splines="line", ranksep="1.0", nodesep="0.8")
-    dot.attr(splines="ortho", ranksep="1.5", nodesep="1.2", concentrate="true", mindist="0.5")
-    dot.attr(rankdir="TB")
-
-    # Collect all unique classes (both parents & children)
-    all_classes = set(lc_data.keys())
-    for connections in lc_data.values():
-        all_classes.update(connections.keys())
-
-    # Add UML classes (all forced to be boxes)
-    for class_name in all_classes:
-        dot.node(class_name, shape="box", style="filled", fillcolor="white")
-
-    # Add relationships with multiplicities at the ends
-    for parent_class, connections in lc_data.items():
-        for child_class, (multiplicity_parent, multiplicity_child) in connections.items():
-            dot.edge(parent_class, child_class, arrowhead="none", taillabel=f" {multiplicity_parent} ", headlabel=f" {multiplicity_child} ")
-
-    plain_output = dot.pipe(format='plain').decode('utf-8')
-
-    root = ET.Element("UMLDiagram")
-
-    for line in plain_output.splitlines():
-        if line.startswith('node'):
-            parts = line.split()
-            name = parts[1]
-            x, y = parts[2], parts[3]
-            node_elem = ET.SubElement(root, "Node", name=name, x=x, y=y)
-
-        elif line.startswith('edge'):
-            parts = line.split()
-            tail, head = parts[1], parts[2]
-            edge_elem = ET.SubElement(root, "Edge", source=tail, target=head)
-
-    # Build XML string
-    tree = ET.ElementTree(root)
-    tree.write("uml_diagram.xml", encoding="utf-8", xml_declaration=True)
-    print("XML written to uml_diagram.xml")
-
-    # Save UML diagram as PNG
-    dot.render(output_filename, cleanup=True)
-    print(f"UML Diagram saved as {output_filename}.png")
-
-
-def wrap_labels(label):
-    words = label.split()
-
-    if len(words) == 1:
-        return label
-
-    mid = len(words) // 2  # Find the middle word
-    return "\n".join([" ".join(words[:mid]), " ".join(words[mid:])])
-
-
 def flatten_save_fragments(ocel, fragments):
-    ocel_object_types = ocel.objects[ocel.object_type_column].values.unique()
-
-    directory = Path('./generated_data/flattened')
-
+    directory = Path('generated_data/fragments')
     for file in directory.iterdir():
         if file.is_file():
             file.unlink()
+
+    ocel_object_types = ocel.objects[ocel.object_type_column].values.unique()
+    flattened_fragment_logs = defaultdict(DataFrame)
 
     # Create a lookup for event ID -> activity type
     eid_to_activity = {}
@@ -112,7 +47,7 @@ def flatten_save_fragments(ocel, fragments):
             print(f"No Actvities belong to the '{object_type}'.")
             continue
 
-        # Filter the flattened log for the activities
+        # Filter the fragments log for the activities
         flattened_ocel = pm4py.ocel_flattening(ocel, object_type)
 
         # Mask that returns true if the activity with instance ocel:eid belongs to the fragment of the current object_type
@@ -120,8 +55,9 @@ def flatten_save_fragments(ocel, fragments):
 
         print(f"'{object_type}' fragment initial length: {len(flattened_ocel.index)}")
         flattened_ocel = flattened_ocel[fragment_mask]
-        print(f"'{object_type}' fragment length after filter: {len(flattened_ocel.index)}")
+        print(f"'{object_type}' fragment length after fragmentation filtering: {len(flattened_ocel.index)}")
 
+        flattened_fragment_logs[object_type] = flattened_ocel
         bpmn = pm4py.discover_bpmn_inductive(flattened_ocel)
 
         # removes start and end nodes
@@ -132,9 +68,10 @@ def flatten_save_fragments(ocel, fragments):
         for start_node in start_nodes:
             bpmn.remove_node(start_node)
 
-        pm4py.write_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.bpmn")
-        pm4py.save_vis_bpmn(bpmn, f"generated_data/flattened/bpmn_{object_type}.png")
+        pm4py.write_bpmn(bpmn, f"generated_data/fragments/bpmn_{object_type}.bpmn")
+        pm4py.save_vis_bpmn(bpmn, f"generated_data/fragments/bpmn_{object_type}.png")
 
+    return flattened_fragment_logs
 
 def filter_end(node):
     if str(node).__contains__('@end'):
@@ -160,7 +97,6 @@ def first_occurrence(ocel):
 
     return first_object_occurrence
 
-
 def get_sorted_oid_paths(ocel):
     object_paths_new : dict[str, list[tuple[str, datetime]]] = dict()
     object_paths : dict[str, list[str]] = dict()
@@ -178,8 +114,6 @@ def get_sorted_oid_paths(ocel):
 
     return object_paths
 
-
-
 def build_graph(paths):
     graph = defaultdict(set)
     for path in paths:
@@ -194,27 +128,7 @@ def create_nx_graph(graph_dict):
             G.add_edge(node, neighbor)
     return G
 
-# additional visualization for the UML diagram
-def draw_and_save_graph(G, filename):
-    plt.figure(figsize=(8, 6))
-    #pos = nx.spring_layout(G)  # Position nodes for visualization
-    pos = nx.kamada_kawai_layout(G)
-    print(f"position is: {pos}")
-
-    for key, value in pos.items():
-        print(f"{key}: {int(value[0]*100)}, {int(value[1]*100)}")
-    print()
-    wrapped_labels = {node: wrap_labels(node) for node in G.nodes()}
-
-    # Draw the graph with better spacing and visibility
-    nx.draw(G, pos, labels= wrapped_labels, node_color='white', edge_color='black',
-            node_size=2500, font_size=10, edgecolors='black', linewidths=1)
-
-    plt.savefig(filename, dpi=300)  # Higher DPI for better quality
-    plt.close()
-
-
-def generate_lifecycles(ocel, obj_ids):
+def generate_lifecycles(ocel):
     object_id_to_type : dict[str, str] = dict()
     object_paths = get_sorted_oid_paths(ocel)
 
@@ -231,15 +145,7 @@ def generate_lifecycles(ocel, obj_ids):
     # builds the graphs from the edges
     nx_graphs = {obj_type: create_nx_graph(graph) for obj_type, graph in type_to_graph.items()}
 
-    xmlplot.create_lifecycle_xml(type_to_paths, obj_ids)
-
-    for obj_type, G in nx_graphs.items():
-        draw_and_save_graph(G, f"generated_data/graph_{obj_type}.png")
-        for transition in G.edges:
-            print(transition)
-
     return nx_graphs
-
 
 def get_all_activities_without_objects(ocel: OCEL):
     activities = set(ocel.events['ocel:activity'])
@@ -247,7 +153,6 @@ def get_all_activities_without_objects(ocel: OCEL):
         if row['ocel:activity'] in activities:
             activities.remove(row['ocel:activity'])
     return activities
-
 
 def get_convergent(ocel):
     # Mapping from event type to set of convergent object types
@@ -270,7 +175,6 @@ def get_convergent(ocel):
     for eid, type_counts in event_obj_counts.items():
         activity_type = eid_to_activity.get(eid)
         if activity_type is None:
-            print(f"Activity type of ocel:eid '{eid}' not found.")
             continue
         for obj_type, count in type_counts.items():
             if count > 1:
@@ -301,7 +205,6 @@ def get_divergent(ocel):
     for oid, activities in object_activity_events.items():
         obj_type = oid_to_type.get(oid)
         if obj_type is None:
-            print(f"Object type of ocel:oid '{oid}' not found.")
             continue
         for activity_type, event_ids in activities.items():
             if len(event_ids) > 1:
@@ -312,63 +215,32 @@ def get_divergent(ocel):
 
 def get_activity_objects(ocel):
     # Mapping from event type to set of object types
-    event_type_to_object_types = defaultdict(set)
-
-    eid_to_activity = {}
-    for index, row in ocel.events.iterrows():
-        eid_to_activity[row['ocel:eid']] = row['ocel:activity']
+    activity_objects = defaultdict(set)
 
     # Iterate through every row and add the occurring object types to the activity type
     for index, row in ocel.relations.iterrows():
-        eid = row['ocel:eid']
+        activity = row['ocel:activity']
         obj_type = row['ocel:type']
-        event_type_to_object_types[eid_to_activity[eid]].add(obj_type)
+        activity_objects[activity].add(obj_type)
 
-    return event_type_to_object_types
+    return activity_objects
 
-def get_unique_activities(ocel):
-    # Temporary mapping from activity type to different interacting object types
-    event_obj_counts = defaultdict(set)
-
-    # Create a lookup for event ID -> activity type
-    eid_to_activity = {}
-    for index, row in ocel.events.iterrows():
-        eid_to_activity[row['ocel:eid']] = row['ocel:activity']
-
-    # Count object occurrences per event
-    for index, row in ocel.relations.iterrows():
-        eid = row['ocel:eid']
-        obj_type = row['ocel:type']
-        activity_type = eid_to_activity.get(eid)
-        event_obj_counts[activity_type].add(obj_type)
-
+def get_unique_activities(activity_objects):
     # Identify activities with 1 object type
     unique_activities = defaultdict(str)
-    for activity_type, objects in event_obj_counts.items():
+    for activity_type, objects in activity_objects.items():
         if len(objects) == 1:
             unique_activities[activity_type] = (next(iter(objects)))
 
     return unique_activities
 
-def helper_fragments(ocel: OCEL):
-    fragments = defaultdict(set)
-    oid_to_object_type = defaultdict(str)
-
-    for _, row in ocel.objects.iterrows():
-        oid_to_object_type[row['ocel:oid']] = row['ocel:type']
-
-    for _, row in ocel.relations.iterrows():
-        fragments[oid_to_object_type[row['ocel:oid']]].add(row['ocel:activity'])
-
-    return fragments
-
 def apply_fragmentation(ocel, totem):
     activities_without_objects = get_all_activities_without_objects(ocel)
     convergent_activities = get_convergent(ocel)
     divergent_objects = get_divergent(ocel)
-    unique_activities = get_unique_activities(ocel)
+    activity_objects = get_activity_objects(ocel)
+    unique_activities = get_unique_activities(activity_objects)
     all_activities = set(ocel.events['ocel:activity'])
-    activity_connected_object_types = get_activity_objects(ocel)
 
     # Map each object type (fragment) to all occurring activities within the fragment
     fragment_activities = defaultdict(set)
@@ -389,7 +261,7 @@ def apply_fragmentation(ocel, totem):
             continue
 
         # All object types that are connected to the activity
-        connected_object_types = activity_connected_object_types[activity]
+        connected_object_types = activity_objects[activity]
 
         # Safe convergent and divergent state of each object type as boolean tuple (is_convergent, is_divergent)
         con_div_check = defaultdict(tuple)
@@ -428,7 +300,7 @@ def apply_fragmentation(ocel, totem):
             continue
 
         if not_conv_not_div_counter > 1:
-            tiebreaker_fragment = apply_tiebreaker(activity, connected_object_types)
+            tiebreaker_fragment = apply_tiebreaker(connected_object_types)
             fragment_activities[tiebreaker_fragment].add(activity)
             print(f"Activity '{activity}' was added to the '{tiebreaker_fragment}' fragment by 'not_conv_not_div_counter > 1' tiebreaker.")
             continue
@@ -472,7 +344,7 @@ def apply_fragmentation(ocel, totem):
                     continue
 
                 # Found a one-to-one relationship
-                tiebreaker_fragment = apply_tiebreaker(activity, connected_object_types)
+                tiebreaker_fragment = apply_tiebreaker(connected_object_types)
                 fragment_activities[tiebreaker_fragment].add(activity)
                 print(f"Activity '{activity}' was added to the '{tiebreaker_fragment}' fragment by 'one_to_one' tiebreaker.")
                 found_relationship_flag = True
@@ -526,17 +398,10 @@ def apply_fragmentation(ocel, totem):
             if found_relationship_flag:
                 continue
 
-        # Tiebreak
-        if not_conv_not_div_counter == 0:
-            tiebreaker_fragment = apply_tiebreaker(activity, connected_object_types)
-            fragment_activities[tiebreaker_fragment].add(activity)
-            print(f"Activity '{activity}' was added to the '{tiebreaker_fragment}' fragment by 'not_conv_not_div_counter == 0' tiebreaker.")
-            continue
 
-        # Future work probably
         # if only_divergent_counter > 2:
-        # The rest is tie_breaker
-        tiebreaker_fragment = apply_tiebreaker(activity, connected_object_types)
+        # The rest is tiebreaker
+        tiebreaker_fragment = apply_tiebreaker(connected_object_types)
         fragment_activities[tiebreaker_fragment].add(activity)
         print(f"Activity '{activity}' was added to the '{tiebreaker_fragment}' fragment by 'final' tiebreaker.")
 
@@ -576,15 +441,13 @@ def get_many_to_many_mapping(totem: dict[str, dict[str, tuple[str, str]]]):
     }
     return result
 
-
 # Uses the tiebreaker list
 # Takes a list of all objects connected to an activity
 # Returns fragment as object_type
-def apply_tiebreaker(activity, activity_objects):
+def apply_tiebreaker(activity_objects):
     for object_type in TIEBREAKER_LIST:
         if activity_objects.__contains__(object_type):
             return object_type
-    raise Exception(f"Activity {activity} could not be assigned to a fragment by the tiebreak.")
 
 def set_tiebreaker(ocel):
     global TIEBREAKER_LIST
@@ -619,51 +482,6 @@ def set_tiebreaker(ocel):
             # Reset tiebreaker if something went wrong
             TIEBREAKER_LIST = list(ocel.objects['ocel:type'].values.unique())
             print("Invalid input. Please enter only numbers separated by commas or 'Y'.")
-
-
-def get_object_graphs(ocel: OCEL):
-    sorted_ocel = ocel.relations.sort_values(by='ocel:timestamp')
-    obj_states = defaultdict(list)
-    obj_graphs = defaultdict(nx.DiGraph)
-    oid_to_object_type = defaultdict(str)
-
-    for _, row in sorted_ocel.iterrows():
-        if len(obj_states[row['ocel:oid']]) == 0:
-            obj_states[row['ocel:oid']].append('new')
-        obj_states[row['ocel:oid']].append(row['ocel:activity'])
-
-    for _, row in ocel.objects.iterrows():
-        oid_to_object_type[row['ocel:oid']] = row['ocel:type']
-
-    for key, values in obj_states.items():
-        obj_type = oid_to_object_type[key]
-
-        #might error
-        graph = obj_graphs[obj_type]
-
-        if len(values) == 1:
-            graph.add_node(values[0])
-        else:
-            for u, v in zip(values, values[1:]):
-                graph.add_edge(u, v)
-
-    return obj_graphs
-
-
-def get_connected_activity_object_states(ocel: OCEL, obj_graphs: defaultdict[str, nx.DiGraph]):
-    activities = ocel.events['ocel:activity'].values.unique()
-
-    # first key: activity, second key: connected object types, value: states of these connected object types
-    activity_objects_states = defaultdict(lambda: defaultdict(set))
-
-    for activity in activities:
-        for object_type, g in obj_graphs.items():
-            if activity not in g.nodes:
-                continue
-            object_origins = list(g.predecessors(activity))
-            activity_objects_states[activity][object_type].update(object_origins)
-
-    return activity_objects_states
 
 def read_ocel():
     print("Enter the path to the OCEL event log")

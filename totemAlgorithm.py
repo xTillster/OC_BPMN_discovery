@@ -230,11 +230,11 @@ def mine_totem(ocel, tau=1):
                     h_event_cardinalities[(type_source, type_target)].setdefault(EC_ZERO_MANY, 0)
                     h_event_cardinalities[(type_source, type_target)][EC_ZERO_MANY] += 1
 
-    print("Starting o2o")
+    #print("Starting o2o")
     # merge o2o and e2o connected objects
     no_duplicate_o2o_graph = ocel.o2o[['ocel:oid', 'ocel:oid_2']].drop_duplicates()
     for (source_o, target_o) in zip(no_duplicate_o2o_graph['ocel:oid'], no_duplicate_o2o_graph['ocel:oid_2']):
-        print(f"{source_o} - {target_o}")
+        #print(f"{source_o} - {target_o}")
         type_of_target_o = None
         for type in ocel_object_types:
             if target_o in type_to_object[type]:
@@ -257,7 +257,8 @@ def mine_totem(ocel, tau=1):
 
                 cardinality = len(o2o[obj][type_target])
                 if type_source == 'products':
-                    print(f"Obj: {obj} Typ: {type_target} Card: {cardinality}")
+                    set()
+                    #print(f"Obj: {obj} Typ: {type_target} Card: {cardinality}")
 
                 if cardinality == 0:
                     h_log_cardinalities[(type_source, type_target)].setdefault(LC_ZERO, 0)
@@ -310,22 +311,22 @@ def mine_totem(ocel, tau=1):
         # for each connection give the 6 relations
         for connected_types in merged_type_relations:
             t1, t2 = connected_types
-            print(f"{t1} -> {t2}")
+            #print(f"{t1} -> {t2}")
 
             # get log cardinality
             lc = get_most_precise_lc((t1, t2), tau, h_log_cardinalities)
             lc_i = get_most_precise_lc((t2, t1), tau, h_log_cardinalities)
-            print(f"LC: {lc_i} - {lc}")
+            #print(f"LC: {lc_i} - {lc}")
             # get event cardinality
             ec = get_most_precise_ec((t1, t2), tau, h_event_cardinalities)
             ec_i = get_most_precise_ec((t2, t1), tau, h_event_cardinalities)
-            print(f"EC: {ec_i} - {ec}")
+            #print(f"EC: {ec_i} - {ec}")
             # get temporal relation
             tr = get_most_precise_tr((t1, t2), tau, h_temporal_relations)
             tr_i = get_most_precise_tr((t2, t1), tau, h_temporal_relations)
-            print(f"TR: {tr}")
+            #print(f"TR: {tr}")
             # print(f"TRi: {tr_i}")
-            print("")
+            #print("")
 
 
     # new
